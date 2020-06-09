@@ -1,10 +1,19 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"strconv"
+	"time"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -12,6 +21,11 @@ import "hash/fnv"
 type KeyValue struct {
 	Key   string
 	Value string
+}
+
+type Workr struct {
+	mapf    func(string, string) []KeyValue
+	reducef func(string, []string) string
 }
 
 //
@@ -24,62 +38,123 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
+	var err error
+	fmt.Println(args)
+
+	switch args.JobName {
+	case "mapJob":
+		var file *os.File
+		if file, err = os.Open(args.Filename); err != nil {
+			log.Fatalf("cannot load file %v", args.Filename)
+		}
+
+		var content []byte
+		if content, err = ioutil.ReadAll(file); err != nil {
+			log.Fatalf("cannot open file %v", args.Filename)
+		}
+
+		kva := w.mapf(args.Filename, string(content))
+
+		tempFiles := make(map[string]*os.File)
+		for i := 0; i < args.NReduce; i++ {
+			fmt.Println(fmt.Sprint(i))
+			name := fmt.Sprintf("/var/tmp/mr-%d-%d", args.JobNo, i)
+			f, _ := os.Create(name)
+			tempFiles[name] = f
+			fmt.Println(tempFiles)
+			defer f.Close()
+		}
+
+		fmt.Println(tempFiles)
+
+		for _, kv := range kva {
+			reduceBucket := ihash(kv.Key) % 10
+			name := fmt.Sprintf("/var/tmp/mr-%d-%d", args.JobNo, reduceBucket)
+			w := bufio.NewWriter(tempFiles[name])
+			enc := json.NewEncoder(w)
+			enc.Encode(&kv)
+			// fmt.Println(tempFiles[name])
+			w.Flush()
+		}
+
+	}
+
+	return nil
+}
+
+// function to write map output to temporary local file
+// func emit() {
+
+// }
 
 //
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	w := Workr{}
 
+	w.mapf = mapf
+	w.reducef = reducef
+
+	rpc.Register(&w)
+	rpc.HandleHTTP()
+
+	sockname := "/var/tmp/824-mr-" + strconv.Itoa(os.Getpid())
+	fmt.Println("@@@" + sockname)
+	os.Remove(sockname)
+
+	l, e := net.Listen("unix", sockname)
+	fmt.Println("!!!!!")
+
+	if e != nil {
+		log.Fatal("listen error:", e)
+	}
+	go http.Serve(l, nil)
+
+	// give the worker time to launch
+	time.Sleep(time.Second / 1000)
+
+	args := RegisterArgs{Address: sockname}
+
+	reply := RegisterReply{}
+
+	call(masterSock(), "Master.Register", &args, &reply)
+
+	// socketname := masterSock()
 	// Your worker implementation here.
+	// client, err := rpc.DialHTTP("unix", socketname)
+	// if err != nil {
+	// 	log.Fatal("dailing:", err)
+	// }
+
+	//////////////
+
+	// call("Master.RetrieveFile", &args, &reply)
+	// // call("Master.Ready", &args, &reply)
+
+	// fmt.Println(reply)
+	// file, err := os.Open(reply.Filename)
+	// if err != nil {
+	// 	log.Fatalf("cannot open %v", reply.Filename)
+	// }
+
+	// content, err := ioutil.ReadAll(file)
+	// if err != nil {
+	// 	log.Fatalf("cannot open %v", reply.Filename)
+	// }
+
+	// file.Close()
+
+	// kva := mapf(reply.Filename, string(content))
+
+	// oname := "mr-out-x"
+	// ofile, _ := os.Create(oname)
+
+	// fmt.Println(len(kva))
 
 	// uncomment to send the Example RPC to the master.
 	// CallExample()
 
-}
-
-//
-// example function to show how to make an RPC call to the master.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
-
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
-}
-
-//
-// send an RPC request to the master, wait for the response.
-// usually returns true.
-// returns false if something goes wrong.
-//
-func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := masterSock()
-	c, err := rpc.DialHTTP("unix", sockname)
-	if err != nil {
-		log.Fatal("dialing:", err)
-	}
-	defer c.Close()
-
-	err = c.Call(rpcname, args, reply)
-	if err == nil {
-		return true
-	}
-
-	fmt.Println(err)
-	return false
 }

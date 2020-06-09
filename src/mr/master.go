@@ -1,15 +1,31 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
-
+import (
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"sync"
+)
 
 type Master struct {
 	// Your definitions here.
+	sync.Mutex
 
+	mapCalls int
+
+	location string
+
+	newCond          *sync.Cond
+	availableWorkers []string
+
+	files []string
+
+	nReduce int
+
+	doneChannel chan bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -24,6 +40,55 @@ func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+// func (m *Master) RetrieveFile(args *RetrieveFile, reply *RetrieveFileReply) error {
+// 	reply.Filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
+// 	return nil
+// }
+
+func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
+	m.availableWorkers = append(m.availableWorkers, args.Address)
+
+	fmt.Println(m.availableWorkers)
+	reply.Success = true
+	// worker is ready to receive work
+	// give worker job to do
+	// move job to pending map
+	// when job finishes remove from pending map
+
+	m.workAssignment()
+	return nil
+}
+
+func (m *Master) workAssignment() {
+	availableWorker := m.availableWorkers[0]
+
+	var filename string
+	filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
+
+	m.mapCalls++
+	var args = StartWorkArgs{JobName: "mapJob", Filename: filename, JobNo: m.mapCalls, NReduce: m.nReduce}
+
+	var reply = StartWorkReply{}
+
+	call(availableWorker, "Workr.StartWork", &args, &reply)
+
+	fmt.Println(len(m.files))
+	if len(m.files) == 0 {
+		fmt.Println("Done with mapping")
+	}
+}
+
+// func schedule(worker string) {
+
+// }
+
+// func (m *Master) manageRegistrations(ch chan string) {
+// 	i := 0
+// 	for {
+// 		mr.Lock()
+
+// 	}
+// }
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -50,7 +115,6 @@ func (m *Master) Done() bool {
 
 	// Your code here.
 
-
 	return ret
 }
 
@@ -60,10 +124,8 @@ func (m *Master) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	m := Master{}
-
-	// Your code here.
-
+	m := Master{files: files, nReduce: nReduce}
+	m.mapCalls = -1
 
 	m.server()
 	return &m
