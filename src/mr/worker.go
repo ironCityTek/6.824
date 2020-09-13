@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
-	"net/http"
 	"net/rpc"
 	"os"
 	"strconv"
@@ -26,6 +25,8 @@ type KeyValue struct {
 type Workr struct {
 	mapf    func(string, string) []KeyValue
 	reducef func(string, []string) string
+
+	l net.Listener
 }
 
 //
@@ -39,9 +40,9 @@ func ihash(key string) int {
 }
 
 func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
+	// runtime.Breakpoint()
 	var err error
 	fmt.Println(args)
-
 	switch args.JobName {
 	case "mapJob":
 		var file *os.File
@@ -71,8 +72,8 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 		for _, kv := range kva {
 			reduceBucket := ihash(kv.Key) % 10
 			name := fmt.Sprintf("/var/tmp/mr-%d-%d", args.JobNo, reduceBucket)
-			w := bufio.NewWriter(tempFiles[name])
-			enc := json.NewEncoder(w)
+			writer := bufio.NewWriter(tempFiles[name])
+			enc := json.NewEncoder(writer)
 			enc.Encode(&kv)
 			// fmt.Println(tempFiles[name])
 			w.Flush()
@@ -93,13 +94,13 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	w := Workr{}
+	w := new(Workr)
 
 	w.mapf = mapf
 	w.reducef = reducef
 
-	rpc.Register(&w)
-	rpc.HandleHTTP()
+	rpcs := rpc.NewServer()
+	rpcs.Register(w)
 
 	sockname := "/var/tmp/824-mr-" + strconv.Itoa(os.Getpid())
 	fmt.Println("@@@" + sockname)
@@ -111,7 +112,8 @@ func Worker(mapf func(string, string) []KeyValue,
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
-	go http.Serve(l, nil)
+	w.l = l
+	// w.register()
 
 	// give the worker time to launch
 	time.Sleep(time.Second / 1000)
@@ -121,6 +123,18 @@ func Worker(mapf func(string, string) []KeyValue,
 	reply := RegisterReply{}
 
 	call(masterSock(), "Master.Register", &args, &reply)
+
+	for {
+		conn, err := w.l.Accept()
+		if err == nil {
+			// w.Lock()
+			// w.nRPC--
+			// w.Unlock()
+			go rpcs.ServeConn(conn)
+		} else {
+			break
+		}
+	}
 
 	// socketname := masterSock()
 	// Your worker implementation here.
