@@ -29,6 +29,13 @@ type Workr struct {
 	l net.Listener
 }
 
+// TODO
+// func (w *Workr) Shutdown(_ *struct{}, res *ShutdownReply) error {
+// 	w.Lock()
+// 	defer w.Unlock()
+
+// }
+
 //
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -44,7 +51,7 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 	var err error
 	fmt.Println(args)
 	switch args.JobName {
-	case "mapJob":
+	case "map":
 		var file *os.File
 		if file, err = os.Open(args.Filename); err != nil {
 			log.Fatalf("cannot load file %v", args.Filename)
@@ -63,7 +70,6 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 			name := fmt.Sprintf("/var/tmp/mr-%d-%d", args.JobNo, i)
 			f, _ := os.Create(name)
 			tempFiles[name] = f
-			fmt.Println(tempFiles)
 			defer f.Close()
 		}
 
@@ -75,8 +81,7 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 			writer := bufio.NewWriter(tempFiles[name])
 			enc := json.NewEncoder(writer)
 			enc.Encode(&kv)
-			// fmt.Println(tempFiles[name])
-			w.Flush()
+			writer.Flush()
 		}
 
 	}

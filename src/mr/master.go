@@ -66,28 +66,57 @@ func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
 	return nil
 }
 
-func (m *Master) scheduleWork() {
+func (m *Master) scheduleWork(jobName string) {
 	workChannel := make(chan string)
 
-	go func() {
-		for {
-			worker := <-workChannel
-			fmt.Println(worker)
-			go m.workAssignment(worker, "mapJob")
-		}
-	}()
+	tasks := len(m.files)
 
-	// while files are in m.files
-	// if workers are available
-	// call workAssignment
-	// if no workers are available wait
+	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", tasks, jobName, m.nReduce)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < tasks; i++ {
+		fmt.Println(i)
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			success := false
+
+			for !success {
+				fmt.Println("b4")
+				worker := <-workChannel
+				fmt.Println("after")
+				m.Lock()
+				var filename string
+				filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
+
+				m.mapCalls++
+				m.Unlock()
+				var args = StartWorkArgs{JobName: jobName, Filename: filename, JobNo: m.mapCalls, NReduce: m.nReduce}
+				var reply = StartWorkReply{}
+
+				fmt.Printf("calling %s\n", worker)
+				success = call(worker, "Workr.StartWork", &args, &reply)
+
+				if success {
+					go func() { workChannel <- worker }()
+				} else {
+					// if !success put file back on m.files
+					m.Lock()
+					m.files = append(m.files, filename)
+					m.Unlock()
+				}
+			}
+		}()
+	}
+
 	/*
 		use channel to signal while loop to run again when
 		worker finishes or is added to available workers
 
 		waitgroup to wait for all the map jobs are finished, then proceed to reduce phase
 	*/
-
 	go func() {
 		for {
 			m.Lock()
@@ -101,7 +130,6 @@ func (m *Master) scheduleWork() {
 					availableWorker, m.availableWorkers = m.availableWorkers[popIndex], m.availableWorkers[:popIndex]
 
 					workChannel <- availableWorker
-
 				} else {
 					m.cond.Wait() // wait for a new worker to be registered
 				}
@@ -109,46 +137,10 @@ func (m *Master) scheduleWork() {
 			}
 		}
 	}()
+	wg.Wait()
 
+	fmt.Println("done mapping")
 }
-
-func (m *Master) workAssignment(worker string, jobName string) (jobChan chan bool) {
-	m.Lock()
-	var filename string
-	filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
-
-	m.mapCalls++
-	m.Unlock()
-
-	var args = StartWorkArgs{JobName: jobName, Filename: filename, JobNo: m.mapCalls, NReduce: m.nReduce}
-	var reply = StartWorkReply{}
-
-	go func() {
-		fmt.Printf("calling %s\n", worker)
-		call(worker, "Workr.StartWork", &args, &reply)
-
-		fmt.Println(len(m.files))
-		if len(m.files) == 0 {
-			fmt.Println("Done with mapping")
-		}
-
-		jobChan <- true
-	}()
-
-	return
-}
-
-// func schedule(worker string) {
-
-// }
-
-// func (m *Master) manageRegistrations(ch chan string) {
-// 	i := 0
-// 	for {
-// 		mr.Lock()
-
-// 	}
-// }
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -210,6 +202,8 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.cond = sync.NewCond(&m)
 
 	m.server()
-	m.scheduleWork()
+	m.scheduleWork("map")
+	// m.scheduleWork("reduce")
+	// m.end()
 	return &m
 }
