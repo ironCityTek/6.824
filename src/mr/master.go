@@ -21,13 +21,14 @@ type Master struct {
 
 	files []string
 
+	nMap    int
 	nReduce int
-
-	doneChannel chan bool
 
 	l net.Listener
 
 	shutdownChan chan bool
+
+	done bool
 }
 
 // Shutdown is an RPC method that shuts down the Master's RPC server.
@@ -37,28 +38,8 @@ func (m *Master) Shutdown(_, _ *struct{}) error {
 	return nil
 }
 
-// Your code here -- RPC handlers for the worker to call.
-
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
-
-// func (m *Master) RetrieveFile(args *RetrieveFile, reply *RetrieveFileReply) error {
-// 	reply.Filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
-// 	return nil
-// }
-
 func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
-	// runtime.Breakpoint()
 	m.availableWorkers = append(m.availableWorkers, args.Address)
-
-	fmt.Println(m.availableWorkers)
 	reply.Success = true
 
 	m.cond.Broadcast()
@@ -68,15 +49,24 @@ func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
 
 func (m *Master) scheduleWork(jobName string) {
 	workChannel := make(chan string)
+	// better variable names?
+	var tasks int
+	// var other int
 
-	tasks := len(m.files)
+	switch jobName {
+	case "map":
+		tasks = m.nMap
+		// other = m.nReduce
+	case "reduce":
+		tasks = m.nMap
+		// other = m.nReduce
+	}
 
-	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", tasks, jobName, m.nReduce)
+	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", tasks, jobName, tasks)
 
 	var wg sync.WaitGroup
 
 	for i := 0; i < tasks; i++ {
-		fmt.Println(i)
 		wg.Add(1)
 
 		go func() {
@@ -84,14 +74,13 @@ func (m *Master) scheduleWork(jobName string) {
 			success := false
 
 			for !success {
-				fmt.Println("b4")
 				worker := <-workChannel
-				fmt.Println("after")
 				m.Lock()
 				var filename string
 				filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
 
 				m.mapCalls++
+				// runtime.Breakpoint()
 				m.Unlock()
 				var args = StartWorkArgs{JobName: jobName, Filename: filename, JobNo: m.mapCalls, NReduce: m.nReduce}
 				var reply = StartWorkReply{}
@@ -124,6 +113,7 @@ func (m *Master) scheduleWork(jobName string) {
 				if len(m.availableWorkers) > 0 {
 					var availableWorker string
 					popIndex := len(m.availableWorkers) - 1
+					// safety clause in case there's only 1 available worker
 					if popIndex < 0 {
 						popIndex = 0
 					}
@@ -132,6 +122,7 @@ func (m *Master) scheduleWork(jobName string) {
 					workChannel <- availableWorker
 				} else {
 					m.cond.Wait() // wait for a new worker to be registered
+					// m.Lock()
 				}
 				m.Unlock()
 			}
@@ -139,7 +130,6 @@ func (m *Master) scheduleWork(jobName string) {
 	}()
 	wg.Wait()
 
-	fmt.Println("done mapping")
 }
 
 //
@@ -150,6 +140,7 @@ func (m *Master) server() {
 	rpcs.Register(m)
 	//l, e := net.Listen("tcp", ":1234")
 	sockname := masterSock()
+	fmt.Println(sockname)
 	os.Remove(sockname)
 	l, e := net.Listen("unix", sockname)
 	if e != nil {
@@ -184,11 +175,14 @@ func (m *Master) server() {
 //
 func (m *Master) Done() bool {
 	// runtime.Breakpoint()
-	ret := false
+	return m.done
+}
 
-	// Your code here.
-
-	return ret
+func (m *Master) end() {
+	// send shutdown messages to all workers,
+	// stop RPC server
+	// send done message
+	m.done = true
 }
 
 //
@@ -197,7 +191,8 @@ func (m *Master) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	m := Master{files: files, nReduce: nReduce}
+	// TODO: find a better way to derive "done" state
+	m := Master{files: files, nMap: len(files), nReduce: nReduce, done: false}
 	m.mapCalls = -1
 	m.cond = sync.NewCond(&m)
 
