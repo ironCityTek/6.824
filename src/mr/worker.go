@@ -29,12 +29,11 @@ type Workr struct {
 	l net.Listener
 }
 
-// TODO
-// func (w *Workr) Shutdown(_ *struct{}, res *ShutdownReply) error {
-// 	w.Lock()
-// 	defer w.Unlock()
+func (w *Workr) Shutdown(_ *struct{}, res *ShutdownReply) error {
+	go func() { w.l.Close() }()
 
-// }
+	return nil
+}
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -76,7 +75,7 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 		fmt.Println(tempFiles)
 
 		for _, kv := range kva {
-			reduceBucket := ihash(kv.Key) % 10
+			reduceBucket := ihash(kv.Key) % args.NReduce
 			name := fmt.Sprintf("/var/tmp/mr-%d-%d", args.JobNo, reduceBucket)
 			writer := bufio.NewWriter(tempFiles[name])
 			enc := json.NewEncoder(writer)
@@ -84,6 +83,25 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 			writer.Flush()
 		}
 
+		// case "reduce":
+		// 	var kva []string
+		// 	var file *os.File
+		// 	filename := fmt.Sprintf("/var/tmp/mr-%d-%d", args.JobNo, args.NReduce)
+		// 	if file, err = os.Open(filename); err != nil {
+		// 		log.Fatalf("cannot load file %v", filename)
+		// 	}
+
+		// 	// need file to be of type "Reader"
+		// 	dec := json.NewDecoder(file)
+		// 	for {
+		// 		var kv KeyValue
+		// 		if err := dec.Decode(&kv); err != nil {
+		// 			break
+		// 		}
+		// 		kva = append(kva, kv.Value)
+		// 	}
+
+		// 	result := w.reducef("", kva)
 	}
 
 	return nil
@@ -112,13 +130,11 @@ func Worker(mapf func(string, string) []KeyValue,
 	os.Remove(sockname)
 
 	l, e := net.Listen("unix", sockname)
-	fmt.Println("!!!!!")
 
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
 	w.l = l
-	// w.register()
 
 	// give the worker time to launch
 	time.Sleep(time.Second / 1000)
@@ -140,40 +156,5 @@ func Worker(mapf func(string, string) []KeyValue,
 			break
 		}
 	}
-
-	// socketname := masterSock()
-	// Your worker implementation here.
-	// client, err := rpc.DialHTTP("unix", socketname)
-	// if err != nil {
-	// 	log.Fatal("dailing:", err)
-	// }
-
-	//////////////
-
-	// call("Master.RetrieveFile", &args, &reply)
-	// // call("Master.Ready", &args, &reply)
-
-	// fmt.Println(reply)
-	// file, err := os.Open(reply.Filename)
-	// if err != nil {
-	// 	log.Fatalf("cannot open %v", reply.Filename)
-	// }
-
-	// content, err := ioutil.ReadAll(file)
-	// if err != nil {
-	// 	log.Fatalf("cannot open %v", reply.Filename)
-	// }
-
-	// file.Close()
-
-	// kva := mapf(reply.Filename, string(content))
-
-	// oname := "mr-out-x"
-	// ofile, _ := os.Create(oname)
-
-	// fmt.Println(len(kva))
-
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
 
 }
