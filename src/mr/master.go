@@ -84,7 +84,9 @@ func (m *Master) scheduleWork(jobName string) {
 				worker := <-m.workChannel
 				m.Lock()
 				var filename string
-				filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
+				if jobName == "map" {
+					filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
+				}
 
 				m.Unlock()
 				var args = StartWorkArgs{JobName: jobName, Filename: filename, JobNo: jobNo, NReduce: m.nReduce}
@@ -178,10 +180,12 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	go func() {
-		// stop RPC server
-		m.Shutdown()
-	}()
+	if m.done == true {
+		go func() {
+			// stop RPC server
+			m.Shutdown()
+		}()
+	}
 	return m.done
 }
 
@@ -236,7 +240,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 
 	m.server()
 	m.scheduleWork("map")
-	// m.scheduleWork("reduce")
+	m.scheduleWork("reduce")
 	m.end()
 	return &m
 }

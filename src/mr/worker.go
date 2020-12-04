@@ -83,25 +83,44 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 			writer.Flush()
 		}
 
-		// case "reduce":
-		// 	var kva []string
-		// 	var file *os.File
-		// 	filename := fmt.Sprintf("/var/tmp/mr-%d-%d", args.JobNo, args.NReduce)
-		// 	if file, err = os.Open(filename); err != nil {
-		// 		log.Fatalf("cannot load file %v", filename)
-		// 	}
+	case "reduce":
+		kvMap := make(map[string][]string)
+		for mapCall := 0; mapCall < args.JobNo; mapCall++ {
+			var file *os.File
+			filename := fmt.Sprintf("/var/tmp/mr-%d-%d", mapCall, args.NReduce-1)
+			if file, err = os.Open(filename); err != nil {
+				log.Fatalf("cannot load file %v", filename)
+			}
+			defer file.Close()
 
-		// 	// need file to be of type "Reader"
-		// 	dec := json.NewDecoder(file)
-		// 	for {
-		// 		var kv KeyValue
-		// 		if err := dec.Decode(&kv); err != nil {
-		// 			break
-		// 		}
-		// 		kva = append(kva, kv.Value)
-		// 	}
+			// need file to be of type "Reader"
+			dec := json.NewDecoder(file)
+			for {
+				var kv KeyValue
+				if err := dec.Decode(&kv); err != nil {
+					break
+				}
+				kvMap[kv.Key] = append(kvMap[kv.Key], kv.Value)
+			}
+		}
 
-		// 	result := w.reducef("", kva)
+		outfileName := fmt.Sprintf("mr-out-%d", args.NReduce)
+
+		var outfile *os.File
+		if outfile, err = os.Create(outfileName); err != nil {
+			log.Fatalf("failed to create file %v", outfileName)
+		}
+		defer outfile.Close()
+
+		enc := json.NewEncoder(outfile)
+
+		for key, values := range kvMap {
+			// fmt.Println("!!!")
+			// fmt.Println(kva)
+			result := w.reducef(key, values)
+			enc.Encode(&KeyValue{key, result})
+		}
+
 	}
 
 	return nil

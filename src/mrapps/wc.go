@@ -6,10 +6,13 @@ package main
 // go build -buildmode=plugin wc.go
 //
 
-import "../mr"
-import "unicode"
-import "strings"
-import "strconv"
+import (
+	"strconv"
+	"strings"
+	"unicode"
+
+	"../mr"
+)
 
 //
 // The map function is called once for each file of input. The first
@@ -39,6 +42,12 @@ func Map(filename string, contents string) []mr.KeyValue {
 // any map task.
 //
 func Reduce(key string, values []string) string {
+	total := 0
+
+	for _, v := range values {
+		cnt, _ := strconv.Atoi(v)
+		total += cnt
+	}
 	// return the number of occurrences of this word.
-	return strconv.Itoa(len(values))
+	return strconv.Itoa(total)
 }
