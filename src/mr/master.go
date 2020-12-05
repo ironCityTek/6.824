@@ -96,7 +96,6 @@ func (m *Master) scheduleWork(jobName string) {
 			bucketNumber := i
 
 			go func() {
-				defer wg.Done()
 				success := false
 
 				for !success {
@@ -108,7 +107,10 @@ func (m *Master) scheduleWork(jobName string) {
 					success = call(worker, "Workr.StartWork", &args, &reply)
 
 					if success {
-						go func() { m.workChannel <- worker }()
+						go func() {
+							m.workChannel <- worker
+							wg.Done()
+						}()
 					}
 				}
 			}()
@@ -188,6 +190,8 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
+	fmt.Println("is Master done?")
+	fmt.Println(m.done)
 	if m.done == true {
 		go func() {
 			// stop RPC server
@@ -198,6 +202,7 @@ func (m *Master) Done() bool {
 }
 
 func (m *Master) end() {
+	fmt.Println("end called")
 	// send shutdown messages to all workers
 	for len(m.availableWorkers) > 0 {
 		var worker string
@@ -220,7 +225,7 @@ func (m *Master) end() {
 		}
 	}
 
-	// close(m.workChannel)
+	close(m.workChannel)
 
 	for worker := range m.workChannel {
 		var reply ShutdownReply
@@ -230,6 +235,7 @@ func (m *Master) end() {
 		}
 	}
 
+	fmt.Println("end end")
 	// set done message
 	m.done = true
 }
@@ -240,7 +246,7 @@ func (m *Master) end() {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	workChannel := make(chan string)
+	workChannel := make(chan string, 16)
 	// TODO: find a better way to derive "done" state
 	m := Master{files: files, nMap: len(files), nReduce: nReduce, done: false, workChannel: workChannel}
 	m.mapCalls = -1
