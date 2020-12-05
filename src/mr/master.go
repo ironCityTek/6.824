@@ -27,6 +27,8 @@ type Master struct {
 
 	l net.Listener
 
+	sockname string
+
 	done bool
 }
 
@@ -70,6 +72,7 @@ func (m *Master) scheduleWork(jobName string) {
 					m.Lock()
 					var filename string
 					filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
+					fmt.Println(filename)
 					m.Unlock()
 
 					var args = StartWorkArgs{JobName: jobName, Filename: filename, JobNo: jobNo, NReduce: m.nReduce}
@@ -155,11 +158,9 @@ func (m *Master) scheduleWork(jobName string) {
 func (m *Master) server() {
 	rpcs := rpc.NewServer()
 	rpcs.Register(m)
-	//l, e := net.Listen("tcp", ":1234")
-	sockname := masterSock()
-	fmt.Println(sockname)
-	os.Remove(sockname)
-	l, e := net.Listen("unix", sockname)
+	m.sockname = masterSock()
+	os.Remove(m.sockname)
+	l, e := net.Listen("unix", m.sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
@@ -202,7 +203,6 @@ func (m *Master) Done() bool {
 }
 
 func (m *Master) end() {
-	fmt.Println("end called")
 	// send shutdown messages to all workers
 	for len(m.availableWorkers) > 0 {
 		var worker string
@@ -222,6 +222,12 @@ func (m *Master) end() {
 			m.Lock()
 			m.availableWorkers = append(m.availableWorkers, worker)
 			m.Unlock()
+		} else {
+			// clean up /var/tmp
+			e := os.Remove(worker)
+			if e != nil {
+				log.Fatal(e)
+			}
 		}
 	}
 

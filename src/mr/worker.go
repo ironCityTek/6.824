@@ -80,7 +80,7 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 
 	case "reduce":
 		kvMap := make(map[string][]string)
-		for mapCall := 0; mapCall < args.JobNo; mapCall++ {
+		for mapCall := 0; mapCall <= args.JobNo; mapCall++ {
 			var file *os.File
 			filename := fmt.Sprintf("/var/tmp/mr-%d-%d", mapCall, args.NReduce)
 			if file, err = os.Open(filename); err != nil {
@@ -107,11 +107,9 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 		}
 		defer outfile.Close()
 
-		enc := json.NewEncoder(outfile)
-
 		for key, values := range kvMap {
 			result := w.reducef(key, values)
-			enc.Encode(&KeyValue{key, result})
+			fmt.Fprintf(outfile, "%v %v\n", key, result)
 		}
 
 	}
