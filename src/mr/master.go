@@ -37,7 +37,9 @@ func (m *Master) Shutdown() error {
 }
 
 func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
+	m.Lock()
 	m.availableWorkers = append(m.availableWorkers, args.Address)
+	m.Unlock()
 	reply.Success = true
 
 	m.cond.Broadcast()

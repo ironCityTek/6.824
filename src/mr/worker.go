@@ -46,7 +46,6 @@ func ihash(key string) int {
 }
 
 func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
-	// runtime.Breakpoint()
 	var err error
 	fmt.Println(args)
 	switch args.JobName {
@@ -115,8 +114,6 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 		enc := json.NewEncoder(outfile)
 
 		for key, values := range kvMap {
-			// fmt.Println("!!!")
-			// fmt.Println(kva)
 			result := w.reducef(key, values)
 			enc.Encode(&KeyValue{key, result})
 		}
