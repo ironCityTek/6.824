@@ -47,7 +47,6 @@ func ihash(key string) int {
 
 func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 	var err error
-	fmt.Println(args)
 	switch args.JobName {
 	case "map":
 		var file *os.File
@@ -64,14 +63,11 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 
 		tempFiles := make(map[string]*os.File)
 		for i := 0; i < args.NReduce; i++ {
-			fmt.Println(fmt.Sprint(i))
 			name := fmt.Sprintf("/var/tmp/mr-%d-%d", args.JobNo, i)
 			f, _ := os.Create(name)
 			tempFiles[name] = f
 			defer f.Close()
 		}
-
-		fmt.Println(tempFiles)
 
 		for _, kv := range kva {
 			reduceBucket := ihash(kv.Key) % args.NReduce
@@ -86,7 +82,7 @@ func (w *Workr) StartWork(args *StartWorkArgs, _ *struct{}) error {
 		kvMap := make(map[string][]string)
 		for mapCall := 0; mapCall < args.JobNo; mapCall++ {
 			var file *os.File
-			filename := fmt.Sprintf("/var/tmp/mr-%d-%d", mapCall, args.NReduce-1)
+			filename := fmt.Sprintf("/var/tmp/mr-%d-%d", mapCall, args.NReduce)
 			if file, err = os.Open(filename); err != nil {
 				log.Fatalf("cannot load file %v", filename)
 			}

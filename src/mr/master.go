@@ -48,66 +48,72 @@ func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
 }
 
 func (m *Master) scheduleWork(jobName string) {
-	// better variable names?
-	var tasks int
-	// var other int
+	var wg sync.WaitGroup
 
 	switch jobName {
 	case "map":
-		tasks = m.nMap
-		// other = m.nReduce
-	case "reduce":
-		tasks = m.nReduce
-		// other = m.nReduce
-	}
+		for i := 0; i < m.nMap; i++ {
+			wg.Add(1)
 
-	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", tasks, jobName, tasks)
+			go func() {
+				defer wg.Done()
+				success := false
 
-	var wg sync.WaitGroup
-
-	for i := 0; i < tasks; i++ {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-			success := false
-
-			m.Lock()
-			var jobNo int
-			switch jobName {
-			case "map":
+				m.Lock()
+				var jobNo int
 				m.mapCalls++
 				jobNo = m.mapCalls
-			case "reduce":
-				jobNo = m.mapCalls
-			}
-			m.Unlock()
-			for !success {
-				worker := <-m.workChannel
-				m.Lock()
-				var filename string
-				if jobName == "map" {
-					filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
-				}
-
 				m.Unlock()
-				var args = StartWorkArgs{JobName: jobName, Filename: filename, JobNo: jobNo, NReduce: m.nReduce}
-				var reply = StartWorkReply{}
+				for !success {
+					worker := <-m.workChannel
 
-				fmt.Printf("calling %s\n", worker)
-				success = call(worker, "Workr.StartWork", &args, &reply)
-
-				if success {
-					go func() { m.workChannel <- worker }()
-				} else {
-					// if !success put file back on m.files
 					m.Lock()
-					m.files = append(m.files, filename)
+					var filename string
+					filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
 					m.Unlock()
+
+					var args = StartWorkArgs{JobName: jobName, Filename: filename, JobNo: jobNo, NReduce: m.nReduce}
+					var reply = StartWorkReply{}
+
+					success = call(worker, "Workr.StartWork", &args, &reply)
+
+					if success {
+						go func() { m.workChannel <- worker }()
+					} else {
+						// if !success put file back on m.files
+						m.Lock()
+						m.files = append(m.files, filename)
+						m.Unlock()
+					}
 				}
-				fmt.Printf("job No #%d \n", jobNo)
-			}
-		}()
+			}()
+		}
+
+	case "reduce":
+		for i := 0; i < m.nReduce; i++ {
+			wg.Add(1)
+
+			bucketNumber := i
+
+			go func() {
+				defer wg.Done()
+				success := false
+
+				for !success {
+					worker := <-m.workChannel
+
+					var args = StartWorkArgs{JobName: jobName, JobNo: m.mapCalls, NReduce: bucketNumber}
+					var reply = StartWorkReply{}
+
+					success = call(worker, "Workr.StartWork", &args, &reply)
+
+					if success {
+						go func() { m.workChannel <- worker }()
+					}
+				}
+			}()
+		}
+
 	}
 
 	/*
