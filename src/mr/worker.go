@@ -136,7 +136,6 @@ func Worker(mapf func(string, string) []KeyValue,
 	rpcs.Register(w)
 
 	sockname := "/var/tmp/824-mr-" + strconv.Itoa(os.Getpid())
-	fmt.Println("@@@" + sockname)
 	os.Remove(sockname)
 
 	l, e := net.Listen("unix", sockname)

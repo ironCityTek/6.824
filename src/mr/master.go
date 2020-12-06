@@ -32,7 +32,7 @@ type Master struct {
 	done bool
 }
 
-// Shutdown is an RPC method that shuts down the Master's RPC server.
+// Shutdown is a method that shuts down the Master's RPC server.
 func (m *Master) Shutdown() error {
 	go func() { m.l.Close() }()
 	return nil
@@ -40,6 +40,7 @@ func (m *Master) Shutdown() error {
 
 func (m *Master) Register(args *RegisterArgs, reply *RegisterReply) error {
 	m.Lock()
+	fmt.Printf("registering %s\n", args.Address)
 	m.availableWorkers = append(m.availableWorkers, args.Address)
 	m.Unlock()
 	reply.Success = true
@@ -58,7 +59,6 @@ func (m *Master) scheduleWork(jobName string) {
 			wg.Add(1)
 
 			go func() {
-				defer wg.Done()
 				success := false
 
 				m.Lock()
@@ -72,7 +72,7 @@ func (m *Master) scheduleWork(jobName string) {
 					m.Lock()
 					var filename string
 					filename, m.files = m.files[len(m.files)-1], m.files[:len(m.files)-1]
-					fmt.Println(filename)
+					fmt.Println(worker, filename)
 					m.Unlock()
 
 					var args = StartWorkArgs{JobName: jobName, Filename: filename, JobNo: jobNo, NReduce: m.nReduce}
@@ -81,8 +81,12 @@ func (m *Master) scheduleWork(jobName string) {
 					success = call(worker, "Workr.StartWork", &args, &reply)
 
 					if success {
-						go func() { m.workChannel <- worker }()
+						go func() {
+							m.workChannel <- worker
+							wg.Done()
+						}()
 					} else {
+						fmt.Printf("failed %q %q\n", worker, filename)
 						// if !success put file back on m.files
 						m.Lock()
 						m.files = append(m.files, filename)
@@ -102,18 +106,23 @@ func (m *Master) scheduleWork(jobName string) {
 				success := false
 
 				for !success {
+					fmt.Println("try? try again?")
 					worker := <-m.workChannel
-
+					fmt.Printf("made it, %s\n", worker)
 					var args = StartWorkArgs{JobName: jobName, JobNo: m.mapCalls, NReduce: bucketNumber}
 					var reply = StartWorkReply{}
 
 					success = call(worker, "Workr.StartWork", &args, &reply)
+					fmt.Printf("%s success? %t\n", worker, success)
 
 					if success {
 						go func() {
+							fmt.Printf("putting %s back in workchannel\n", worker)
 							m.workChannel <- worker
 							wg.Done()
 						}()
+					} else {
+						fmt.Printf("failed reduce %s\n", worker)
 					}
 				}
 			}()
@@ -140,6 +149,7 @@ func (m *Master) scheduleWork(jobName string) {
 					}
 					availableWorker, m.availableWorkers = m.availableWorkers[popIndex], m.availableWorkers[:popIndex]
 
+					fmt.Printf("putting worker in workchannel %s\n", availableWorker)
 					m.workChannel <- availableWorker
 				} else {
 					m.cond.Wait() // wait for a new worker to be registered
@@ -191,8 +201,6 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	fmt.Println("is Master done?")
-	fmt.Println(m.done)
 	if m.done == true {
 		go func() {
 			// stop RPC server
@@ -203,6 +211,8 @@ func (m *Master) Done() bool {
 }
 
 func (m *Master) end() {
+	close(m.workChannel)
+	fmt.Printf("ending -- %d in queue, %d in workchannel\n", len(m.availableWorkers), len(m.workChannel))
 	// send shutdown messages to all workers
 	for len(m.availableWorkers) > 0 {
 		var worker string
@@ -231,8 +241,6 @@ func (m *Master) end() {
 		}
 	}
 
-	close(m.workChannel)
-
 	for worker := range m.workChannel {
 		var reply ShutdownReply
 		success := call(worker, "Workr.Shutdown", new(struct{}), &reply)
@@ -241,7 +249,6 @@ func (m *Master) end() {
 		}
 	}
 
-	fmt.Println("end end")
 	// set done message
 	m.done = true
 }
