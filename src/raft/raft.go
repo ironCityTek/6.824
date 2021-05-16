@@ -57,6 +57,18 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// persistent state across all servers (updated on stable storage before responding to RPCs)
+	currentTerm		int // latest term server has seen
+	votedFor		int // candidateId that received vote in current term (or null if none)
+	logs			map[int]interface{} // log entries, each one contains a command for the state machine, and a term when the entry was received by the leader
+
+	// Volatile state on all servers
+	commitIndex		int // index of highest log entry known to be committed (initialized to 0, increases monotonically)
+	lastApplied 	int // index of highest log entry applied to state machine (initialized to 0, increases monotonically)
+
+	// volatile state on leaders (reinitialized after election)
+	nextIndex		map[int]int // for each server, index of the next log entry to send to that server
+	matchIndex		map[int]int // for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
 }
 
 // return currentTerm and whether this server
@@ -116,7 +128,10 @@ func (rf *Raft) readPersist(data []byte) {
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
+	term			int		// candidates term
+	candidateId		int		// the candidate requesting the vote
+	lastLogIndex	int		// index of candidate's last log entry
+	lastLogTerm		int		// term of candidate's last log entry
 }
 
 //
@@ -124,7 +139,22 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
-	// Your data here (2A).
+	term			int		// current term, for candidate to update itself
+	voteGranted		bool	// true means candidate received vote
+}
+
+type AppendEntriesArgs struct {
+	term			int						// leaders term
+	leaderId		int						// so followers can redirect clients
+	prevLogIndex	int						// index of log entry immediately preceding new ones
+	prevLogTerm		int						// term of prevLogIndex entry
+	entries			map[int]interface{}		// log entries to store (empty for heartbeat; may send more than one for efficiency)
+	leaderCommit	int						// leader's commitIndex
+}
+
+type AppendEntriesReply struct {
+	term			int		// current term, for leader to update itself
+	success			bool	// true if follower contained an entry matching	prevLogEntry and prevLogTerm
 }
 
 //
