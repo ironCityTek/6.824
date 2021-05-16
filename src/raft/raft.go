@@ -161,7 +161,21 @@ type AppendEntriesReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
+	isLaterTermThanThisFollower := false
+	isThisFollowersVoteSpokenFor := true
+	isCandidatesLogUpToDate := false
+	if (args.term > rf.currentTerm) {
+		isLaterTermThanThisFollower = true
+	}
+
+	if (rf.votedFor == nil || rf.votedFor == args.candidateId) {
+		isThisFollowersVoteSpokenFor = false
+		// add a check that candidate’s log is at least as up-to-date as receiver’s log
+		isCandidatesLogUpToDate
+	}
+
+	var reply = RequestVoteReply{term: rf.term, voteGranted: isLaterTermThanThisFollower && !isThisFollowersVoteSpokenFor && isCandidatesLogUpToDate }
+	rf.sendRequestVote()
 }
 
 //
