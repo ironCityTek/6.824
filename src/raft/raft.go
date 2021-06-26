@@ -69,6 +69,7 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
+	heartbeat	chan  bool
 	identity	string
 	timer		*time.Timer
 
@@ -432,6 +433,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.currentTerm = 0
+	rf.heartbeat = make(chan bool)
 
 	go rf.startLifecycle("follower")
 
