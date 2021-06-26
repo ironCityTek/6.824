@@ -91,9 +91,8 @@ type Raft struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
-	var term int
-	var isleader bool
-	// Your code here (2A).
+	term := rf.currentTerm
+	isleader := (rf.identity == "leader")
 	return term, isleader
 }
 
