@@ -91,6 +91,7 @@ type Raft struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
+	fmt.Printf("%v current term %v\n", rf.me, rf.currentTerm)
 	term := rf.currentTerm
 	isleader := (rf.identity == "leader")
 	return term, isleader
@@ -169,8 +170,8 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term			int		// current term, for leader to update itself
-	Success			bool	// true if follower contained an entry matching	prevLogEntry and prevLogTerm
+	Term				int		// current term, for a former leader to update itself
+	HeartbeatResponse	bool	// true if follower contained an entry matching	prevLogEntry and prevLogTerm
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *RequestVoteReply) {
@@ -178,7 +179,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *RequestVoteReply) 
 	// TODO: does this need another check for the very first heartbeat, where PrevLogIndex might actually be 0?
 	// or do we not send a heartbeat until the prevLogIndex is at least 1?
 	if (args.PrevLogIndex == 0) {
-		return;
+		fmt.Printf("%v voted for %v and the requesting LeaderId is%v\n", rf.me, rf.votedFor, args.LeaderId)
+		reply.HeartbeatResponse = (rf.votedFor == args.LeaderId)
+
+		if (reply.HeartbeatResponse) {
+			// reset timer for election phase
+			rf.heartbeat <- true
+		}
+
+		return
 	}
 }
 
@@ -201,9 +210,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		isCandidatesLogUpToDate = true
 	}
 
+	// runtime.Breakpoint()
 	reply.VoteGranted = isLaterTermThanThisFollower && !isThisFollowersVoteSpokenFor && isCandidatesLogUpToDate
 	if (reply.VoteGranted) {
 		rf.votedFor = args.CandidateId
+		go rf.startLifecycle("follower")
 		fmt.Printf("%v voted for %v\n", rf.me, rf.votedFor)
 	} else {
 		reply.Term = rf.currentTerm
@@ -255,9 +266,9 @@ func (rf *Raft) sendHeartbeat(server int) bool {
 		Entries: make(map[int]interface{}),
 		LeaderCommit: 0,
 	}
-	ok := rf.peers[server].Call("Raft.AppendEntries", &args, &reply)
+	rf.peers[server].Call("Raft.AppendEntries", &args, &reply)
 
-	return ok
+	return reply.HeartbeatResponse
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -319,27 +330,46 @@ func (rf *Raft) startLeaderElection() {
 }
 
 func (rf *Raft) startHeartbeatTimer() {
-	waitTime := randomTimer()
-	rf.timer = time.AfterFunc(waitTime * time.Millisecond, rf.startLeaderElection)
+	waitTime := rf.randomTimeGenerator()
+	// rf.timer = time.AfterFunc(waitTime * time.Millisecond, rf.startLeaderElection)
+
+	select {
+	case <-rf.heartbeat:
+		fmt.Printf("%v starting heartbeat over\n", rf.me)
+		go rf.startHeartbeatTimer()
+	case <-time.After(waitTime):
+		fmt.Printf("%v timed out in term %v after %v\n", rf.me, rf.currentTerm, waitTime)
+
+		go rf.startLeaderElection()
+	}
 }
 
-func (rf *Raft) heartbeat(server int) {
-	ok := rf.sendHeartbeat(server)
-	// runtime.Breakpoint()
+// func (rf *Raft) heartbeat(server int) {
+// 	rf.sendHeartbeat(server)
+// 	// runtime.Breakpoint()
 
-	// Stop prevents the Timer from firing. It returns true if the call stops the timer, false if the timer has
-	// already expired or been stopped. Stop does not close the channel, to prevent a read from the channel succeeding incorrectly.
-	if (!rf.timer.Stop()) {
-		// To ensure the channel is empty after a call to Stop, check the return value and drain the channel.
-		<- rf.timer.C
+// 	// Stop prevents the Timer from firing. It returns true if the call stops the timer, false if the timer has
+// 	// already expired or been stopped. Stop does not close the channel, to prevent a read from the channel succeeding incorrectly.
+// 	if (!rf.timer.Stop()) {
+// 		fmt.Printf("request from %v to %v timed out ", rf.me, server)
+// 		// To ensure the channel is empty after a call to Stop, check the return value and drain the channel.
+// 		<- rf.timer.C
 
-		rf.startLifecycle("candidate")
+// 		rf.startLifecycle("candidate")
+// 	}
+// }
+
+func (rf *Raft) updateFollowers(server int) {
+	if (server == rf.me) {
+		return
 	}
+	fmt.Printf("%v sent a heartbeat to %v\n", rf.me, server)
+	ok := rf.sendHeartbeat(server)
 
 	if (ok) {
-		go rf.heartbeat(server)
+		fmt.Printf("%v server responded ok\n", server)
 	} else {
-		rf.startLifecycle("candidate")
+		fmt.Printf("%v server responded not ok\n", server)
 	}
 }
 
@@ -351,16 +381,14 @@ func (rf *Raft) startLifecycle(lifecycle string) {
 	rf.identity = lifecycle
 
 	if (lifecycle == "follower") {
-		rf.startHeartbeatTimer()
+		rf.heartbeat <- true
 	} else if (lifecycle == "candidate") {
-		go rf.startHeartbeatTimer()
 		rf.votedFor = rf.me
 		rf.currentTerm = rf.currentTerm + 1
 
 		votes := make([]int, len(rf.peers))
 		votes[rf.me] = 1 // current node votes for itself
 
-		// TODO: move requests to goroutines
 		for i := range rf.peers {
 			logLength := len(rf.logs)
 			lastLogIndex := 0
@@ -381,9 +409,11 @@ func (rf *Raft) startLifecycle(lifecycle string) {
 				if (reply.VoteGranted) {
 					votes[i] = 1
 					} else {
-						rf.currentTerm = reply.Term
+						if (reply.Term > rf.currentTerm) {
+							rf.currentTerm = reply.Term
+						}
 					}
-				}
+			}
 
 			// if the leader phase has already started, this sendRequestVote resolved after the candidate already got
 			// enough votes to become the leader
@@ -392,26 +422,31 @@ func (rf *Raft) startLifecycle(lifecycle string) {
 				for _, vote := range votes {
 					voteTotal += vote
 					if (voteTotal > (len(votes) / 2)) {
-						// runtime.Breakpoint()
-						fmt.Printf("%v starting leader phase %v with votes %v\n", i, rf.me, votes)
-						rf.startLifecycle("leader")
+						fmt.Printf("%v starting leader phase with votes %v\n", rf.me, votes)
+						go rf.startLifecycle("leader")
 						break
 					}
 				}
 			}
 		}
 	} else if (lifecycle == "leader") {
-		// runtime.Breakpoint()
 		for i := range rf.peers {
-			go rf.heartbeat(i)
+			go rf.updateFollowers(i)
 		}
+
+		waitTime := rf.randomTimeGenerator() / 3
+		fmt.Printf("%v waiting %v\n", rf.me, waitTime)
+		time.Sleep(waitTime)
+
+		go rf.startLifecycle("leader")
 	}
 }
 
-func randomTimer() time.Duration {
+func (rf *Raft) randomTimeGenerator() time.Duration {
+	time.Sleep(time.Duration(rf.me) * time.Nanosecond) // this is to prevent nodes from having the same seeded value for rand
 	rand.Seed(time.Now().UnixNano())
-	min := 150
-	max := 300
+	min := int(150 * 1000000)
+	max := int(300 * 1000000)
 	return time.Duration(rand.Intn(max - min + 1) + min)
 }
 
@@ -435,6 +470,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	rf.heartbeat = make(chan bool)
 
+	go rf.startHeartbeatTimer()
 	go rf.startLifecycle("follower")
 
 	// initialize from state persisted before a crash
