@@ -154,8 +154,9 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
-	Term			int		// current term, for candidate to update itself
-	VoteGranted		bool	// true means candidate received vote
+	Term				int		// current term, for candidate to update itself
+	VoteGranted			bool	// true means candidate received vote
+	HeartbeatResponse	bool	// true for a positive response (consensus with the caller)
 }
 
 type AppendEntriesArgs struct {
