@@ -75,7 +75,7 @@ type Raft struct {
 
 	// persistent state across all servers (updated on stable storage before responding to RPCs)
 	currentTerm		int // latest term server has seen
-	votedFor		int // candidateId that received vote in current term (or null if none)
+	votedFor		*int // candidateId that received vote in current term (or null if none)
 	logs			map[int]Log // log entries, each one contains a command for the state machine, and a term when the entry was received by the leader
 
 	// Volatile state on all servers
@@ -167,6 +167,7 @@ type AppendEntriesArgs struct {
 	PrevLogTerm		int	// term of prevLogIndex entry
 	Entries			map[int]interface{}	// log entries to store (empty for heartbeat; may send more than one for efficiency)
 	LeaderCommit	int	// leader's commitIndex
+	IsHeartbeat		bool
 }
 
 type AppendEntriesReply struct {
@@ -176,11 +177,10 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *RequestVoteReply) {
 	// first, check if this call is a heartbeat or a real AppendEntries request
-	// TODO: does this need another check for the very first heartbeat, where PrevLogIndex might actually be 0?
-	// or do we not send a heartbeat until the prevLogIndex is at least 1?
-	if (args.PrevLogIndex == 0) {
-		fmt.Printf("%v voted for %v and the requesting LeaderId is%v\n", rf.me, rf.votedFor, args.LeaderId)
-		reply.HeartbeatResponse = (rf.votedFor == args.LeaderId)
+	if (args.IsHeartbeat) {
+		// runtime.Breakpoint()
+		reply.HeartbeatResponse = (*rf.votedFor == args.LeaderId)
+		fmt.Printf("%v's leader is %v and the requesting heartbeat LeaderId is %v\n", rf.me, *rf.votedFor, args.LeaderId)
 
 		if (reply.HeartbeatResponse) {
 			// reset timer for election phase
@@ -204,7 +204,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	// Each value of an empty struct variable is set to the zero value for its type, int is 0 (not nil)
-	if (rf.votedFor == 0 || rf.votedFor == args.CandidateId) {
+	if (rf.votedFor == nil || *rf.votedFor == args.CandidateId) {
 		isThisFollowersVoteSpokenFor = false
 		// add a check that candidate’s log is at least as up-to-date as receiver’s log
 		isCandidatesLogUpToDate = true
@@ -213,9 +213,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// runtime.Breakpoint()
 	reply.VoteGranted = isLaterTermThanThisFollower && !isThisFollowersVoteSpokenFor && isCandidatesLogUpToDate
 	if (reply.VoteGranted) {
-		rf.votedFor = args.CandidateId
+		if (rf.votedFor == nil) {
+			// this block will hit the first time the node votes for a leader
+			// and is needed to support a nullable value for rf.votedFor
+			rf.votedFor = new(int)
+		}
+		*rf.votedFor = args.CandidateId
 		go rf.startLifecycle("follower")
-		fmt.Printf("%v voted for %v\n", rf.me, rf.votedFor)
+		fmt.Printf("%v voted for %v\n", rf.me, *rf.votedFor)
 	} else {
 		reply.Term = rf.currentTerm
 		fmt.Printf("%v declined to vote for %v\n", rf.me, args.CandidateId)
@@ -260,11 +265,12 @@ func (rf *Raft) sendHeartbeat(server int) bool {
 	reply := AppendEntriesReply{}
 	args := AppendEntriesArgs{
 		Term: rf.currentTerm,
-		LeaderId: 0,
+		LeaderId: *rf.votedFor,
 		PrevLogIndex: 0,
 		PrevLogTerm: 0,
 		Entries: make(map[int]interface{}),
 		LeaderCommit: 0,
+		IsHeartbeat: true,
 	}
 	rf.peers[server].Call("Raft.AppendEntries", &args, &reply)
 
@@ -336,11 +342,13 @@ func (rf *Raft) startHeartbeatTimer() {
 	select {
 	case <-rf.heartbeat:
 		fmt.Printf("%v starting heartbeat over\n", rf.me)
+
 		go rf.startHeartbeatTimer()
 	case <-time.After(waitTime):
-		fmt.Printf("%v timed out in term %v after %v\n", rf.me, rf.currentTerm, waitTime)
-
-		go rf.startLeaderElection()
+		if (rf.identity != "leader") {
+			fmt.Printf("%v timed out in term %v after %v\n", rf.me, rf.currentTerm, waitTime)
+			go rf.startLeaderElection()
+		}
 	}
 }
 
@@ -367,9 +375,9 @@ func (rf *Raft) updateFollowers(server int) {
 	ok := rf.sendHeartbeat(server)
 
 	if (ok) {
-		fmt.Printf("%v server responded ok\n", server)
+		fmt.Printf("%v server responded ok to %v\n", server, rf.me)
 	} else {
-		fmt.Printf("%v server responded not ok\n", server)
+		fmt.Printf("%v server responded not ok to %v\n", server, rf.me)
 	}
 }
 
@@ -383,11 +391,21 @@ func (rf *Raft) startLifecycle(lifecycle string) {
 	if (lifecycle == "follower") {
 		rf.heartbeat <- true
 	} else if (lifecycle == "candidate") {
-		rf.votedFor = rf.me
+		// we're here because of a timeout, so restart the heartbeat timer
+		go rf.startHeartbeatTimer()
+
+		if (rf.votedFor == nil) {
+			// this block will hit the first time the node votes for a leader
+			// and is needed to support a nullable value for rf.votedFor
+			rf.votedFor = new(int)
+		}
+		*rf.votedFor = rf.me
 		rf.currentTerm = rf.currentTerm + 1
 
 		votes := make([]int, len(rf.peers))
 		votes[rf.me] = 1 // current node votes for itself
+
+		var wg sync.WaitGroup
 
 		for i := range rf.peers {
 			logLength := len(rf.logs)
@@ -415,6 +433,10 @@ func (rf *Raft) startLifecycle(lifecycle string) {
 					}
 			}
 
+			// we run the next codeblock synchronously across the parent loop's iterations
+			// to avoid responses arriving at the same time and starting 2 leader lifecycles
+			wg.Wait()
+			wg.Add(1)
 			// if the leader phase has already started, this sendRequestVote resolved after the candidate already got
 			// enough votes to become the leader
 			if (rf.identity != "leader") {
@@ -423,11 +445,13 @@ func (rf *Raft) startLifecycle(lifecycle string) {
 					voteTotal += vote
 					if (voteTotal > (len(votes) / 2)) {
 						fmt.Printf("%v starting leader phase with votes %v\n", rf.me, votes)
+						rf.identity = "leader" // need to update identity early so waitGroup behaves correctly
 						go rf.startLifecycle("leader")
 						break
 					}
 				}
 			}
+			wg.Done()
 		}
 	} else if (lifecycle == "leader") {
 		for i := range rf.peers {
